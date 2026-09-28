@@ -42,9 +42,10 @@ Conseguenza: il modulo TV serve soprattutto a (a) dire **canale e orario** per P
 ### 2.3 Strumenti disponibili
 
 - **GitHub** (questo repository): codice, configurazione, dati versionati, documentazione. Eventualmente GitHub Actions come scheduler di riserva.
-- **n8n**: orchestrazione dei flussi (raccolta dati, calcoli, invio messaggi, risposta ai comandi).
-- **Telegram**: canale/gruppo privato per le notifiche + bot per i comandi.
-- **Google Drive**: archivio report settimanali, backup, eventuale foglio Google per modifiche "a mano" della rosa.
+- **n8n**: gira su una VM Google Cloud già esistente, gestita dal PC dell'utente. Sulla stessa VM è presente anche un'installazione di Claude Code. Orchestra raccolta dati, calcoli, invio messaggi e risposta ai comandi.
+- **Telegram**: esiste già un canale collegato a n8n che smista comandi. Il progetto si aggancia a quel bot aggiungendo i propri comandi (prefisso `/f_` per non confliggere con quelli esistenti) e un canale o topic dedicato per le notifiche.
+- **Google Drive / Google Sheets**: un foglio Google tiene lo storico delle performance (una riga per giocatore per giornata), leggibile da telefono e aggiornato da n8n. Drive ospita anche i report settimanali e i backup.
+- **Claude API**: usato dal livello AI (sezione 5.7). Gira sui crediti gratuiti dell'account API, che sono separati dall'abbonamento Max: Max copre le chat e Claude Code, non le chiamate fatte da n8n.
 
 ---
 
@@ -203,7 +204,8 @@ Cinque indici per giocatore, tutti normalizzati su scala 0-100, più un semaforo
 ### 5.4 Storage e versionamento
 
 - **GitHub**: configurazione, snapshot JSON, indici calcolati (`data/indici/<giornata>.json`), report in markdown (`reports/<giornata>.md`). I commit automatici usano un'utenza bot dedicata.
-- **Google Drive**: copia del report settimanale (PDF o markdown), backup mensile della cartella `data/`, eventuale foglio Google "rosa" se si preferisce modificare la rosa da telefono.
+- **Google Sheets** (`Fanta26 - Performance`): storico leggibile delle performance. Un foglio `giornate` con una riga per giocatore per giornata (voto, bonus, minuti, FG, DP, MS, DT, semaforo, esito reale), un foglio `rosa` che rispecchia `config/rosa.yaml` e un foglio `riepilogo` con medie e trend. n8n scrive dopo ogni giornata; GitHub resta la fonte di verità, il foglio è la vista comoda.
+- **Google Drive**: copia del report settimanale (PDF o markdown) e backup mensile della cartella `data/`.
 - Retention: gli snapshot giornalieri si compattano a fine mese in un unico file per tipo.
 
 ### 5.5 Notifiche Telegram (canale privato)
@@ -221,6 +223,8 @@ Regola anti-rumore: un alert per evento, con aggiornamento del messaggio esisten
 
 ### 5.6 Comandi del bot (n8n, Telegram Trigger)
 
+Il bot è quello già collegato a n8n. Il workflow esistente che smista i comandi instrada tutto ciò che inizia con `/f_` verso il workflow `10-bot` di questo progetto; qui sotto i comandi sono scritti senza prefisso per leggibilità.
+
 - `/rosa` — semaforo compatto di tutti i 30.
 - `/g <nome>` — scheda giocatore: indici, ultime 5 gare, prossima partita, TV.
 - `/prossime` — le partite dei nostri nei prossimi 7 giorni, con orario e TV.
@@ -233,6 +237,8 @@ Regola anti-rumore: un alert per evento, con aggiornamento del messaggio esisten
 ### 5.7 Livello AI (opzionale, fase successiva)
 
 Un nodo LLM riceve gli indici già calcolati e produce il testo del report in linguaggio naturale, con i "perché" (es. "Szoboszlai: forma alta, ma il Liverpool gioca in Champions martedì e il Chelsea in trasferta è la gara più difficile del turno"). L'AI **non** calcola i numeri, li spiega. Così il costo resta basso e le raccomandazioni restano verificabili.
+
+Costo stimato: una chiamata a settimana per il report più una al giorno per gli alert, con circa 5.000 token in ingresso e 1.500 in uscita ciascuna. Con Claude Opus 5.5 (4 $ per milione di token in ingresso, 20 $ in uscita) sono pochi centesimi a settimana: i crediti gratuiti bastano per tutta la stagione. La chiave API vive nelle credenziali di n8n.
 
 ---
 
@@ -348,15 +354,35 @@ Stima consumo API-Football sul piano gratuito: circa 20 chiamate al giorno nei g
 
 ---
 
-## 12. Decisioni aperte
+## 12. Decisioni prese e decisioni aperte
+
+**Prese**
+
+- **Hosting n8n**: VM Google Cloud esistente, con Claude Code installato sulla stessa macchina. I webhook Telegram funzionano già (il bot smista comandi).
+- **Telegram**: si riusa il bot e il canale esistenti; i comandi del progetto hanno prefisso `/f_`.
+- **Piano API-Football**: si parte dal piano gratuito (100 richieste al giorno) ottimizzando le chiamate; passaggio a Pro solo se il consumo lo richiede.
+- **Claude API**: crediti gratuiti dell'account API, non l'abbonamento Max. Modello Claude Opus 5.5 per il report; costo trascurabile.
+- **Storico performance**: foglio Google `Fanta26 - Performance` aggiornato da n8n, con GitHub come fonte di verità.
+
+**Aperte**
 
 1. **Fonte per i voti ufficiali**: scraping del sito Euroleghe (fragile) oppure usare i rating dell'API come proxy e inserire i voti a mano una volta a settimana?
-2. **Hosting di n8n**: istanza già esistente (cloud o self-hosted)? Serve che sia raggiungibile da Telegram per i webhook del bot.
-3. **Piano API**: partire gratis e passare a Pro se serve, oppure Pro da subito per non dover ottimizzare le chiamate?
-4. **Rosa modificabile da dove**: solo via commit/bot Telegram, o anche da un foglio Google su Drive che n8n legge?
-5. **Un solo canale Telegram o due** (consigli + sistema)? Il disegno ne prevede due.
-6. **Livello AI**: si vuole da subito il testo "spiegato" o bastano indici e semaforo nella prima versione?
-7. **Database della lega**: quali delle 37 squadre sono attive nella vostra lega? Serve per calcolare correttamente la deadline.
+2. **Notifiche**: nello stesso canale dei comandi, o in un canale/topic separato per i consigli e uno per gli errori di sistema? Il disegno ne prevede due.
+3. **Livello AI**: si vuole da subito il testo "spiegato" o bastano indici e semaforo nella prima versione?
+4. **Database della lega**: quali delle 37 squadre sono attive nella vostra lega? Serve per calcolare correttamente la deadline.
+5. **Accesso alla VM da Claude Code**: per lavorare direttamente sulla VM servirà una sessione avviata dalla VM stessa o dal PC che la gestisce (vedi sezione 13).
+
+---
+
+## 13. Come lavorare sulla VM con Claude Code
+
+La sessione cloud di Claude Code (quella che ha scritto questo documento) gira in un container isolato: non ha `gcloud`, chiavi SSH né credenziali Google, quindi non può raggiungere la VM né il PC. Tre modi per collegare i due mondi:
+
+1. **Sessione sulla VM** (consigliato per configurare n8n): sulla VM è già installato Claude Code. Avviarlo lì, nella cartella del progetto clonato, e da lì può leggere i workflow di n8n esportati, controllare i servizi (`systemctl`, `docker ps`) e modificare la configurazione. Con `claude remote-control` la sessione compare anche nell'app Claude Code e si può guidare dal telefono.
+2. **Sessione dal PC** (Claude Desktop o `claude remote-control` in un terminale): il PC ha già accesso alla VM, quindi Claude può usare `gcloud compute ssh` o SSH diretto per ispezionarla.
+3. **Sessione cloud con credenziali** (solo se serve automazione senza PC acceso): aggiungere all'ambiente cloud un segreto con una chiave SSH o un service account Google con permessi minimi (`compute.instances.get`, SSH via OS Login). Da valutare, perché mette credenziali della VM in un ambiente esterno.
+
+Primo passo consigliato: da una sessione sulla VM, esportare i workflow n8n esistenti (in particolare quello che smista i comandi Telegram) nella cartella `n8n/workflows/` di questo repository, così il progetto parte da ciò che c'è davvero.
 
 ---
 
